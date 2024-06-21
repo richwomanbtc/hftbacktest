@@ -1,0 +1,7 @@
+relative_half_spread: 0.00025
+relative_grid_interval: 0.00025
+grid_num: 5
+min_grid_step: 0.000001
+order_qty: 10000.0
+tick_size: 0.000001
+lot_size: 1.0

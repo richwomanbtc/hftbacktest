@@ -31,6 +31,7 @@ pub struct OrderManager {
     prefix: String,
     orders: HashMap<String, OrderWrapper>,
     order_id_map: HashMap<i64, String>,
+    last_order_id: i64,
 }
 
 impl OrderManager {
@@ -39,6 +40,7 @@ impl OrderManager {
             prefix: prefix.to_string(),
             orders: Default::default(),
             order_id_map: Default::default(),
+            last_order_id: 0,
         }
     }
 
@@ -267,17 +269,19 @@ impl OrderManager {
     }
 
     pub fn prepare_client_order_id(&mut self, asset_no: usize, order: Order) -> Option<String> {
-        if self.order_id_map.contains_key(&order.order_id) {
-            return None;
-        }
+        // if self.order_id_map.contains_key(&order.order_id) {
+        //     return None;
+        // }
 
-        let rand_id: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(16)
-            .map(char::from)
-            .collect();
+        // let rand_id: String = rand::thread_rng()
+        //     .sample_iter(&Alphanumeric)
+        //     .take(16)
+        //     .map(char::from)
+        //     .collect();
 
-        let client_order_id = format!("{}{}{}", self.prefix, &rand_id, order.order_id);
+        let sequencial_id: i64 = self.last_order_id + 1;
+
+        let client_order_id = format!("{}{:>016}{}", self.prefix, &sequencial_id, order.order_id);
         if self.orders.contains_key(&client_order_id) {
             return None;
         }
@@ -293,6 +297,7 @@ impl OrderManager {
                 removed_by_rest: false,
             },
         );
+        self.last_order_id += 1;
         Some(client_order_id)
     }
 

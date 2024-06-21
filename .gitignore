@@ -7,3 +7,4 @@ rust/Cargo.lock
 rust/target
 *.npz
 rust/**/tmp_*
+rust/.env
