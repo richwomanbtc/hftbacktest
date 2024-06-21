@@ -27,7 +27,7 @@ fn prepare_live(
         .endpoint(Endpoint::Public)
         .api_key(api_key)
         .secret(secret)
-        .order_prefix(symbol)
+        // .order_prefix(symbol)
         .build()
         .unwrap();
 
