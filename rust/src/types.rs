@@ -60,10 +60,10 @@ impl Error {
 /// Events occurring in a live bot sent by a [`Connector`](`crate::connector::Connector`).
 #[derive(Clone, Debug)]
 pub enum LiveEvent {
-    L2Feed(usize, Vec<Event>),
-    L3Feed(usize, L3Event),
-    Order(OrderResponse),
-    Position(Position),
+    L2Feed { asset_no: usize, events: Vec<Event> },
+    L3Feed { asset_no: usize, event: L3Event },
+    Order { asset_no: usize, order: Order },
+    Position { asset_no: usize, qty: f64 },
     Error(Error),
 }
 
@@ -258,7 +258,9 @@ pub struct L3Event {
     pub px: f32,
     /// Quantity
     pub qty: f32,
-    pub _reserved: [i64; 3],
+    /// Priority, which is required when the order book needs to be recovered from the snapshot.
+    pub priority: u64,
+    pub _reserved: [i64; 2],
 }
 
 impl L3Event {
@@ -276,17 +278,6 @@ impl L3Event {
             }
         }
     }
-}
-
-/// Holding position
-#[derive(Clone, PartialEq, Debug)]
-pub struct Position {
-    /// Corresponding asset number
-    pub asset_no: usize,
-    /// Symbol of this asset
-    pub symbol: String,
-    /// Holding position quantity
-    pub qty: f64,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -577,14 +568,7 @@ impl Debug for Order {
 #[derive(Clone, Debug)]
 pub enum Request {
     /// An order request, a tuple consisting of an asset number and an [`Order`].
-    Order((usize, Order)),
-}
-
-/// An order response from [`Connector`](`crate::connector::Connector`).
-#[derive(Clone, Debug)]
-pub struct OrderResponse {
-    pub asset_no: usize,
-    pub order: Order,
+    Order { asset_no: usize, order: Order },
 }
 
 /// Provides state values.

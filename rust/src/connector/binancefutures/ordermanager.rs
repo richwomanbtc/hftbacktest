@@ -4,11 +4,13 @@ use std::{
 };
 
 use chrono::Utc;
-use rand::{distributions::Alphanumeric, Rng};
 use tracing::{debug, error};
 
 use crate::{
-    connector::binancefutures::{msg::rest::OrderResponse, BinanceFuturesError},
+    connector::{
+        binancefutures::{msg::rest::OrderResponse, BinanceFuturesError},
+        util::gen_random_string,
+    },
     types::{Order, Status},
 };
 
@@ -20,7 +22,7 @@ struct OrderWrapper {
     removed_by_rest: bool,
 }
 
-pub type WrappedOrderManager = Arc<Mutex<OrderManager>>;
+pub type OrderManagerWrapper = Arc<Mutex<OrderManager>>;
 
 /// Binance has separated channels for REST APIs and Websocket. Order responses are delivered
 /// through these channels, with no guaranteed order of transmission. To prevent duplicate handling
@@ -273,11 +275,7 @@ impl OrderManager {
         //     return None;
         // }
 
-        // let rand_id: String = rand::thread_rng()
-        //     .sample_iter(&Alphanumeric)
-        //     .take(16)
-        //     .map(char::from)
-        //     .collect();
+        let rand_id = gen_random_string(16);
 
         let sequencial_id: i64 = self.last_order_id + 1;
 

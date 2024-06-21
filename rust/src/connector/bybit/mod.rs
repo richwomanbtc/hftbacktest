@@ -11,15 +11,14 @@ use tracing::error;
 use crate::{
     connector::{
         bybit::{
-            ordermanager::{OrderManager, WrappedOrderManager},
+            ordermanager::{OrderManager, OrderManagerWrapper},
             rest::BybitClient,
             ws::{connect_private, connect_public, connect_trade, OrderOp},
         },
         Connector,
     },
     live::Asset,
-    prelude::OrderResponse,
-    types::{Error, ErrorKind, LiveEvent, Order, Position},
+    types::{BuildError, Error, ErrorKind, LiveEvent, Order},
 };
 
 mod msg;
@@ -56,6 +55,176 @@ pub enum BybitError {
     OrderError(i64, String),
 }
 
+/// Bybit connector [`Bybit`] builder.
+/// Currently only `linear` category (linear futures) is supported.
+pub struct BybitBuilder {
+    public_url: String,
+    private_url: String,
+    trade_url: String,
+    rest_url: String,
+    topics: HashSet<String>,
+    api_key: String,
+    secret: String,
+    category: String,
+    order_prefix: String,
+}
+
+impl BybitBuilder {
+    /// Sets an endpoint to connect.
+    pub fn endpoint(self, endpoint: Endpoint) -> Self {
+        if let Endpoint::Custom(_) = endpoint {
+            panic!(
+                "Use `public_url`, `private_url`, `trade_url`, and `rest_url` to set a custom endpoint instead"
+            );
+        }
+        self.public_url(endpoint.clone())
+            .private_url(endpoint.clone())
+            .trade_url(endpoint.clone())
+            .rest_url(endpoint)
+    }
+
+    /// Sets the public Websocket stream endpoint url.
+    pub fn public_url<E: Into<Endpoint>>(self, endpoint: E) -> Self {
+        match endpoint.into() {
+            Endpoint::Linear => Self {
+                public_url: "wss://stream.bybit.com/v5/public/linear".to_string(),
+                ..self
+            },
+            Endpoint::Testnet => Self {
+                public_url: "wss://stream-testnet.bybit.com/v5/public/linear".to_string(),
+                ..self
+            },
+            Endpoint::Custom(public_url) => Self { public_url, ..self },
+        }
+    }
+
+    /// Sets the private Websocket stream endpoint url.
+    pub fn private_url<E: Into<Endpoint>>(self, endpoint: E) -> Self {
+        match endpoint.into() {
+            Endpoint::Linear => Self {
+                private_url: "wss://stream.bybit.com/v5/private".to_string(),
+                ..self
+            },
+            Endpoint::Testnet => Self {
+                private_url: "wss://stream-testnet.bybit.com/v5/private".to_string(),
+                ..self
+            },
+            Endpoint::Custom(private_url) => Self {
+                private_url,
+                ..self
+            },
+        }
+    }
+
+    /// Sets the trade Websocket stream endpoint url.
+    pub fn trade_url<E: Into<Endpoint>>(self, endpoint: E) -> Self {
+        match endpoint.into() {
+            Endpoint::Linear => Self {
+                trade_url: "wss://stream.bybit.com/v5/trade".to_string(),
+                ..self
+            },
+            Endpoint::Testnet => Self {
+                trade_url: "wss://stream-testnet.bybit.com/v5/trade".to_string(),
+                ..self
+            },
+            Endpoint::Custom(trade_url) => Self { trade_url, ..self },
+        }
+    }
+
+    /// Sets the REST API endpoint url.
+    pub fn rest_url<E: Into<Endpoint>>(self, endpoint: E) -> Self {
+        match endpoint.into() {
+            Endpoint::Linear => Self {
+                rest_url: "https://api.bybit.com".to_string(),
+                ..self
+            },
+            Endpoint::Testnet => Self {
+                rest_url: "https://api-testnet.bybit.com".to_string(),
+                ..self
+            },
+            Endpoint::Custom(rest_url) => Self { rest_url, ..self },
+        }
+    }
+
+    /// Sets the API key
+    pub fn category(self, category: &str) -> Self {
+        Self {
+            category: category.to_string(),
+            ..self
+        }
+    }
+
+    /// Sets the API key
+    pub fn api_key(self, api_key: &str) -> Self {
+        Self {
+            api_key: api_key.to_string(),
+            ..self
+        }
+    }
+
+    /// Sets the secret key
+    pub fn secret(self, secret: &str) -> Self {
+        Self {
+            secret: secret.to_string(),
+            ..self
+        }
+    }
+
+    /// Sets the order prefix, which is used to differentiate the orders submitted through this
+    /// connector.
+    pub fn order_prefix(self, order_prefix: &str) -> Self {
+        Self {
+            order_prefix: order_prefix.to_string(),
+            ..self
+        }
+    }
+
+    /// Adds an additional topic to receive through the public WebSocket stream.
+    pub fn add_topic(mut self, stream: &str) -> Self {
+        todo!();
+        self.topics.insert(stream.to_string());
+        self
+    }
+
+    /// Builds [`Bybit`] connector.
+    pub fn build(self) -> Result<Bybit, BuildError> {
+        if self.public_url.is_empty() {
+            return Err(BuildError::BuilderIncomplete("public_url"));
+        }
+        if self.private_url.is_empty() {
+            return Err(BuildError::BuilderIncomplete("private_url"));
+        }
+        if self.trade_url.is_empty() {
+            return Err(BuildError::BuilderIncomplete("trade_url"));
+        }
+        if self.rest_url.is_empty() {
+            return Err(BuildError::BuilderIncomplete("rest_url"));
+        }
+        if self.api_key.is_empty() {
+            return Err(BuildError::BuilderIncomplete("api_key"));
+        }
+        if self.secret.is_empty() {
+            return Err(BuildError::BuilderIncomplete("secret"));
+        }
+        if self.category.is_empty() {
+            return Err(BuildError::BuilderIncomplete("category"));
+        }
+
+        let order_manager: OrderManagerWrapper =
+            Arc::new(Mutex::new(OrderManager::new(&self.order_prefix)));
+        Ok(Bybit::new(
+            &self.public_url,
+            &self.private_url,
+            &self.trade_url,
+            &self.rest_url,
+            &self.api_key,
+            &self.secret,
+            &self.order_prefix,
+            &self.category,
+        ))
+    }
+}
+
 pub struct Bybit {
     public_url: String,
     private_url: String,
@@ -66,12 +235,26 @@ pub struct Bybit {
     api_key: String,
     secret: String,
     order_tx: Option<UnboundedSender<OrderOp>>,
-    order_man: WrappedOrderManager,
+    order_man: OrderManagerWrapper,
     category: String,
     client: BybitClient,
 }
 
 impl Bybit {
+    pub fn builder() -> BybitBuilder {
+        BybitBuilder {
+            public_url: "".to_string(),
+            private_url: "".to_string(),
+            trade_url: "".to_string(),
+            rest_url: "".to_string(),
+            topics: Default::default(),
+            api_key: "".to_string(),
+            secret: "".to_string(),
+            category: "".to_string(),
+            order_prefix: "".to_string(),
+        }
+    }
+
     /// Currently, only `linear` category is supported.
     pub fn new(
         public_url: &str,
@@ -83,6 +266,12 @@ impl Bybit {
         prefix: &str,
         category: &str,
     ) -> Self {
+        if prefix.contains("/") {
+            panic!("prefix cannot include '/'.");
+        }
+        if prefix.len() > 8 {
+            panic!("prefix length should be not greater than 8.");
+        }
         Self {
             public_url: public_url.to_string(),
             private_url: private_url.to_string(),
@@ -173,6 +362,7 @@ impl Connector for Bybit {
         let assets_private = self.assets.clone();
         let api_key_private = self.api_key.clone();
         let secret_private = self.secret.clone();
+        let category_private = self.category.clone();
         let order_man_private = self.order_man.clone();
         let client_private = self.client.clone();
         let _ = tokio::spawn(async move {
@@ -184,43 +374,52 @@ impl Connector for Bybit {
 
                 // Cancel all orders before connecting to the stream in order to start with the
                 // clean state.
-                if let Err(error) = client_private.cancel_all_orders().await {
-                    error!(?error, "Couldn't cancel all open orders.");
-                    ev_tx_private
-                        .send(LiveEvent::Error(Error::with(ErrorKind::OrderError, error)))
-                        .unwrap();
-                    error_count += 1;
-                    continue 'connection;
+                for (symbol, _) in assets_private.iter() {
+                    if let Err(error) = client_private
+                        .cancel_all_orders(&category_private, symbol)
+                        .await
+                    {
+                        error!(?error, %symbol, "Couldn't cancel all open orders.");
+                        ev_tx_private
+                            .send(LiveEvent::Error(Error::with(ErrorKind::OrderError, error)))
+                            .unwrap();
+                        error_count += 1;
+                        continue 'connection;
+                    }
                 }
                 {
                     let mut order_manager_ = order_man_private.lock().unwrap();
                     let orders = order_manager_.clear_orders();
                     for (asset_no, order) in orders {
                         ev_tx_private
-                            .send(LiveEvent::Order(OrderResponse { asset_no, order }))
+                            .send(LiveEvent::Order { asset_no, order })
                             .unwrap();
                     }
                 }
 
                 // Fetches the initial states such as positions and open orders.
-                match client_private.get_position_information().await {
-                    Ok(positions) => {
-                        positions.into_iter().for_each(|position| {
-                            assets_private.get(&position.symbol).map(|asset_info| {
-                                ev_tx_private
-                                    .send(LiveEvent::Position(Position {
-                                        asset_no: asset_info.asset_no,
-                                        symbol: position.symbol,
-                                        qty: position.size,
-                                    }))
-                                    .unwrap();
+                for (symbol, _) in assets_private.iter() {
+                    match client_private
+                        .get_position_information(&category_private, symbol)
+                        .await
+                    {
+                        Ok(positions) => {
+                            positions.into_iter().for_each(|position| {
+                                assets_private.get(&position.symbol).map(|asset_info| {
+                                    ev_tx_private
+                                        .send(LiveEvent::Position {
+                                            asset_no: asset_info.asset_no,
+                                            qty: position.size,
+                                        })
+                                        .unwrap();
+                                });
                             });
-                        });
-                    }
-                    Err(error) => {
-                        error!(?error, "Couldn't get position information.");
-                        error_count += 1;
-                        continue 'connection;
+                        }
+                        Err(error) => {
+                            error!(?error, "Couldn't get position information.");
+                            error_count += 1;
+                            continue 'connection;
+                        }
                     }
                 }
 
